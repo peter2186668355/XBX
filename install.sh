@@ -14,7 +14,7 @@ NC='\033[0m'
 
 GITHUB_USER="${GITHUB_USER:-peter2186668355}"
 REPO="${REPO:-XBX}"
-V2BX_VERSION="${V2BX_VERSION:-v1.01}"
+V2BX_VERSION="${V2BX_VERSION:-v1.02}"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/V2bX"
 SERVICE_FILE="/etc/systemd/system/V2bX.service"
@@ -34,7 +34,7 @@ detect_arch() {
 # ---------- 下载二进制 ----------
 download_v2bx() {
     local arch="$1"
-    local url="https://github.com/${GITHUB_USER}/${REPO}/releases/${V2BX_VERSION}/download/V2bX-${arch}.zip"
+    local url="https://github.com/${GITHUB_USER}/${REPO}/releases/download/${V2BX_VERSION}/V2bX-${arch}.zip"
     echo -e "${GREEN}>>> 下载 V2bX (${arch})...${NC}"
     wget -q --show-progress "$url" -O /tmp/V2bX.zip
     unzip -o /tmp/V2bX.zip -d /tmp/v2bx-install/
