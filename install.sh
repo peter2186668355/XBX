@@ -5,8 +5,6 @@
 #
 # 无需额外安装 obfs-server — obfs 已编译进 V2bX 二进制。
 
-set -e
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -36,7 +34,12 @@ download_v2bx() {
     local arch="$1"
     local url="https://github.com/${GITHUB_USER}/${REPO}/releases/download/${V2BX_VERSION}/V2bX-${arch}.zip"
     echo -e "${GREEN}>>> 下载 V2bX (${arch})...${NC}"
-    wget -q --show-progress "$url" -O /tmp/V2bX.zip
+    echo "URL: $url"
+    if ! wget --show-progress "$url" -O /tmp/V2bX.zip; then
+        echo -e "${RED}下载失败！请检查网络连接或 Release 是否存在: $url${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}>>> 解压...${NC}"
     unzip -o /tmp/V2bX.zip -d /tmp/v2bx-install/
     cp /tmp/v2bx-install/V2bX "${INSTALL_DIR}/V2bX"
     chmod +x "${INSTALL_DIR}/V2bX"
@@ -44,7 +47,7 @@ download_v2bx() {
 }
 
 # ---------- 复制 geo 数据 ----------
-download_geo() {
+copy_geo() {
     echo -e "${GREEN}>>> 复制 geoip/geosite 数据...${NC}"
     cp /tmp/v2bx-install/geoip.dat "${CONFIG_DIR}/geoip.dat" 2>/dev/null || true
     cp /tmp/v2bx-install/geosite.dat "${CONFIG_DIR}/geosite.dat" 2>/dev/null || true
@@ -166,7 +169,7 @@ if [ -f "${INSTALL_DIR}/V2bX" ]; then
 fi
 
 download_v2bx "$ARCH"
-download_geo
+copy_geo
 
 if [ ! -f "${CONFIG_DIR}/config.json" ]; then
     generate_config
