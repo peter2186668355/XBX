@@ -1,0 +1,5 @@
+.git
+.omc
+*.md
+.DS_Store
+docker-compose.yml

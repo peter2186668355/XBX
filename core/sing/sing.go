@@ -2,7 +2,10 @@ package sing
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"sync"
 
@@ -32,6 +35,8 @@ type Sing struct {
 	logFactory                log.Factory
 	users                     *UserMap
 	nodeReportMinTrafficBytes map[string]int64
+	obfsListeners             map[string]net.Listener
+	obfsMu                    sync.Mutex
 }
 
 type UserMap struct {
@@ -93,6 +98,7 @@ func New(c *conf.CoreConfig) (vCore.Core, error) {
 			uidMap: make(map[string]int),
 		},
 		nodeReportMinTrafficBytes: make(map[string]int64),
+		obfsListeners:             make(map[string]net.Listener),
 	}, nil
 }
 
@@ -101,6 +107,12 @@ func (b *Sing) Start() error {
 }
 
 func (b *Sing) Close() error {
+	b.obfsMu.Lock()
+	for tag, ln := range b.obfsListeners {
+		ln.Close()
+		delete(b.obfsListeners, tag)
+	}
+	b.obfsMu.Unlock()
 	return b.box.Close()
 }
 
@@ -120,3 +132,38 @@ func (b *Sing) Protocols() []string {
 func (b *Sing) Type() string {
 	return "sing"
 }
+
+func (b *Sing) serveObfsListener(tag string, ln net.Listener) {
+	for {
+		clientConn, err := ln.Accept()
+		if err != nil {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Temporary() {
+				continue
+			}
+			return
+		}
+		go func() {
+			defer clientConn.Close()
+			in, found := b.box.Inbound().Get(tag)
+			if !found {
+				return
+			}
+			type tcpListener interface{ TCPListener() net.Listener }
+			if ssIn, ok := in.(tcpListener); ok {
+				ssAddr := ssIn.TCPListener().Addr().String()
+				ssConn, err := net.Dial("tcp", ssAddr)
+				if err != nil {
+					return
+				}
+				defer ssConn.Close()
+				go func() {
+					io.Copy(ssConn, clientConn)
+					ssConn.Close()
+				}()
+				io.Copy(clientConn, ssConn)
+			}
+		}()
+	}
+}
+

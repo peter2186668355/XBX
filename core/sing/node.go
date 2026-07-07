@@ -2,8 +2,10 @@ package sing
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 	"encoding/json"
 
 	"github.com/InazumaV/V2bX/api/panel"
+	"github.com/InazumaV/V2bX/common/obfs"
 	"github.com/InazumaV/V2bX/conf"
 	"github.com/sagernet/sing-box/option"
 	F "github.com/sagernet/sing/common/format"
@@ -239,6 +242,13 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 		default:
 			keyLength = 16
 		}
+		// Obfs mode: sing-box binds loopback only, obfs listener handles public port
+		if n.Obfs == "http" || n.Obfs == "tls" {
+			loopback := netip.AddrFrom4([4]byte{127, 0, 0, 1})
+			listen.Listen = (*badoption.Addr)(&loopback)
+			listen.ListenPort = 0 // OS assigns ephemeral port
+			listen.TCPFastOpen = false
+		}
 		ssoption := &option.ShadowsocksInboundOptions{
 			ListenOptions: listen,
 			Method:        n.Cipher,
@@ -254,6 +264,15 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 		ssoption.Users = []option.ShadowsocksUser{{
 			Password: randomPasswd,
 		}}
+		// Simple-obfs is TCP-only, sniffing disabled (deobfuscated stream misidentifies)
+		if n.Obfs == "http" || n.Obfs == "tls" {
+			ssoption.Network = option.NetworkList("tcp")
+			ssoption.SniffEnabled = false
+		}
+		// ponytail: reject unknown obfs early instead of silent ignore
+		if n.Obfs != "" && n.Obfs != "http" && n.Obfs != "tls" {
+			return option.Inbound{}, fmt.Errorf("unsupported obfs type: %s, only http/tls supported", n.Obfs)
+		}
 		in.Options = ssoption
 	case "trojan":
 		n := info.Trojan
@@ -413,10 +432,64 @@ func (b *Sing) AddNode(tag string, info *panel.NodeInfo, config *conf.Options) e
 	if err != nil {
 		return fmt.Errorf("add inbound error: %s", err)
 	}
+
+	// ponytail: wire obfs listener after sing-box inbound is ready
+	if info.Type == "shadowsocks" {
+		obfsType := info.Shadowsocks.Obfs
+		if obfsType == "http" || obfsType == "tls" {
+			publicPort := uint16(info.Common.ServerPort)
+			addr := config.ListenIP + ":" + strconv.Itoa(int(publicPort))
+			publicLn, err := net.Listen("tcp", addr)
+			if err != nil {
+				in.Remove(tag)
+				return fmt.Errorf("obfs public listen error: %w", err)
+			}
+
+			var obfsLn net.Listener
+			switch obfsType {
+			case "http":
+				obfsHost := ""
+				if info.Shadowsocks.ObfsSettings != nil {
+					obfsHost = info.Shadowsocks.ObfsSettings.Host
+				}
+				obfsLn = obfs.NewHTTPObfsListener(publicLn, obfsHost)
+			case "tls":
+				if config.CertConfig == nil || config.CertConfig.CertFile == "" {
+					publicLn.Close()
+					in.Remove(tag)
+					return fmt.Errorf("tls obfs requires certificate")
+				}
+				tlsCfg := &tls.Config{
+					Certificates: make([]tls.Certificate, 1),
+				}
+				tlsCfg.Certificates[0], err = tls.LoadX509KeyPair(config.CertConfig.CertFile, config.CertConfig.KeyFile)
+				if err != nil {
+					publicLn.Close()
+					in.Remove(tag)
+					return fmt.Errorf("load tls cert for obfs error: %w", err)
+				}
+				obfsLn = obfs.NewTLSObfsListener(publicLn, tlsCfg)
+			}
+
+			b.obfsMu.Lock()
+			b.obfsListeners[tag] = publicLn
+			b.obfsMu.Unlock()
+			go b.serveObfsListener(tag, obfsLn)
+		}
+	}
+
 	return nil
 }
 
 func (b *Sing) DelNode(tag string) error {
+	// ponytail: close obfs listener before removing sing-box inbound
+	b.obfsMu.Lock()
+	if ln, ok := b.obfsListeners[tag]; ok {
+		ln.Close()
+		delete(b.obfsListeners, tag)
+	}
+	b.obfsMu.Unlock()
+
 	in := b.box.Inbound()
 	err := in.Remove(tag)
 	if err != nil {

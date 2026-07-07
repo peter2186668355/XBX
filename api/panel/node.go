@@ -100,10 +100,17 @@ type RealityConfig struct {
 	MaxTimeDiff  string `json:"MaxTimeDiff"`
 }
 
+type ObfsSettings struct {
+	Host string `json:"host"`
+	Path string `json:"path"`
+}
+
 type ShadowsocksNode struct {
 	CommonNode
-	Cipher    string `json:"cipher"`
-	ServerKey string `json:"server_key"`
+	Cipher       string        `json:"cipher"`
+	ServerKey    string        `json:"server_key"`
+	Obfs         string        `json:"obfs"`
+	ObfsSettings *ObfsSettings `json:"obfs_settings"`
 }
 
 type TrojanNode struct {
